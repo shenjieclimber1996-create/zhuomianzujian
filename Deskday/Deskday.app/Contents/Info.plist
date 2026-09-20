@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>Deskday</string>
+<key>CFBundleIdentifier</key><string>local.zz.deskday</string>
+<key>CFBundleName</key><string>Deskday</string>
+<key>CFBundleDisplayName</key><string>我的工作桌</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>1.0</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSCalendarsFullAccessUsageDescription</key><string>显示本周日程，并在你保存时创建带提醒的日历事件。</string>
+<key>NSRemindersFullAccessUsageDescription</key><string>显示待办和本周重点，并同步你创建或完成的提醒事项。</string>
+<key>NSAppleEventsUsageDescription</key><string>连接 Apple 备忘录，显示近期笔记，并保存你新建的备忘。</string>
+<key>NSHighResolutionCapable</key><true/>
+</dict></plist>
