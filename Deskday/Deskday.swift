@@ -3,6 +3,7 @@ import AppKit
 import EventKit
 
 import CoreText
+import UniformTypeIdentifiers
 
 enum Retro {
     static func color(_ n: UInt32) -> Color { Color(red: Double((n >> 16) & 255)/255, green: Double((n >> 8) & 255)/255, blue: Double(n & 255)/255) }
@@ -23,6 +24,19 @@ let peach = Retro.color(0xdeb96c)
 let lavender = Retro.accent
 let surface = Retro.panel
 struct Memo: Identifiable { let id: String; let title: String; let text: String }
+struct ToolboxLink: Identifiable, Codable, Equatable {
+    let id: UUID
+    var title: String
+    var url: String
+    var tags: [String]
+    var favorite: Bool
+    var createdAt: Date
+    init(title: String, url: String, tags: [String] = ["未分类"], favorite: Bool = false) {
+        self.id = UUID(); self.title = title; self.url = url; self.tags = tags.isEmpty ? ["未分类"] : tags; self.favorite = favorite; self.createdAt = Date()
+    }
+    var host: String { URL(string: url)?.host?.replacingOccurrences(of: "www.", with: "") ?? url }
+    var initials: String { String(title.prefix(2)).uppercased() }
+}
 func quoted(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n") + "\"" }
 func html(_ s: String) -> String { s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\n", with: "<br>") }
 let scriptQueue = DispatchQueue(label: "deskday.notes")
@@ -55,6 +69,7 @@ func apple(_ source: String) async throws -> NSAppleEventDescriptor {
     var browseToken = 0
     @Published var lastSync: Date?
     @Published var pinned: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinned") ?? [])
+    @Published var toolboxLinks: [ToolboxLink] = (try? JSONDecoder().decode([ToolboxLink].self, from: UserDefaults.standard.data(forKey: "toolboxLinks") ?? Data())) ?? []
     /// 日程分区“任意日期查看”的浏览锚点与对应整周事件；不影响 events（仍固定为本周，供概览/桌面统计）。
     @Published var browseDate: Date = Date()
     @Published var browseEvents: [EKEvent] = []
@@ -96,6 +111,18 @@ func apple(_ source: String) async throws -> NSAppleEventDescriptor {
     init() {
         NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: ek, queue: .main) { [weak self] _ in Task { @MainActor in await self?.refresh() } }
     }
+    func saveToolbox() { if let data = try? JSONEncoder().encode(toolboxLinks) { UserDefaults.standard.set(data, forKey: "toolboxLinks") } }
+    func addToolbox(_ title: String, _ url: String, _ tags: [String]) {
+        var value = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let match = value.range(of: #"https?://[^\s<>\"']+"#, options: .regularExpression) { value = String(value[match]) }
+        if !value.lowercased().hasPrefix("http://") && !value.lowercased().hasPrefix("https://") { value = "https://" + value }
+        guard let parsed = URL(string: value), parsed.host != nil else { error = "无法保存链接：请拖入网页地址，或填写完整的 http/https 链接。"; return }
+        toolboxLinks.insert(ToolboxLink(title: title.isEmpty ? (parsed.host ?? value) : title, url: value, tags: tags), at: 0); saveToolbox(); message = "已保存到百宝箱 · " + (parsed.host ?? value)
+    }
+    func toggleToolboxFavorite(_ link: ToolboxLink) { guard let i = toolboxLinks.firstIndex(where: { $0.id == link.id }) else { return }; toolboxLinks[i].favorite.toggle(); saveToolbox() }
+    func updateToolboxTags(_ link: ToolboxLink, _ tags: [String]) { guard let i = toolboxLinks.firstIndex(where: { $0.id == link.id }) else { return }; toolboxLinks[i].tags = tags.isEmpty ? ["未分类"] : tags; saveToolbox() }
+    func renameToolboxTag(_ old: String, _ new: String) { let value = new.trimmingCharacters(in: .whitespacesAndNewlines); guard !value.isEmpty, value != "全部" else { return }; for i in toolboxLinks.indices { toolboxLinks[i].tags = toolboxLinks[i].tags.map { $0 == old ? value : $0 } }; saveToolbox() }
+    func deleteToolboxTag(_ tag: String) { for i in toolboxLinks.indices { toolboxLinks[i].tags.removeAll { $0 == tag }; if toolboxLinks[i].tags.isEmpty { toolboxLinks[i].tags = ["未分类"] } }; saveToolbox() }
     func connect() async {
         do {
             if !calendarAllowed { _ = try await ek.requestFullAccessToEvents() }
@@ -899,6 +926,108 @@ struct CodexLaunchButtons: View {
     }
 }
 
+struct ToolboxView: View {
+    @EnvironmentObject var store: DeskStore
+    @State private var query = ""
+    @State private var tag = "全部"
+    @State private var showForm = false
+    @State private var url = ""
+    @State private var title = ""
+    @State private var tagsText = ""
+    @State private var editingLink: ToolboxLink?
+    @State private var editingTags = ""
+    @State private var showTagManager = false
+    @State private var newTag = ""
+    @State private var renameTag: String?
+    @State private var renameText = ""
+    @State private var dropTargeted = false
+    var allTags: [String] { ["全部"] + Array(Set(store.toolboxLinks.flatMap { $0.tags })).sorted() }
+    var links: [ToolboxLink] {
+        store.toolboxLinks.filter { link in
+            (tag == "全部" || link.tags.contains(tag)) && (query.isEmpty || link.title.localizedCaseInsensitiveContains(query) || link.host.localizedCaseInsensitiveContains(query))
+        }.sorted { if $0.favorite != $1.favorite { return $0.favorite }; return $0.createdAt > $1.createdAt }
+    }
+    func receive(_ providers: [NSItemProvider]) -> Bool {
+        guard let provider = providers.first else { return false }
+        let types = [UTType.url.identifier, UTType.plainText.identifier]
+        let type = types.first(where: { provider.hasItemConformingToTypeIdentifier($0) }) ?? UTType.plainText.identifier
+        provider.loadItem(forTypeIdentifier: type, options: nil) { item, _ in
+            let value: String
+            if let url = item as? URL { value = url.absoluteString }
+            else if let url = item as? NSURL { value = url.absoluteString ?? "" }
+            else if let text = item as? String { value = text }
+            else if let data = item as? Data { value = String(data: data, encoding: .utf8) ?? "" }
+            else { value = "" }
+            DispatchQueue.main.async {
+                guard !value.isEmpty else { self.store.error = "没有读取到拖拽内容，请从浏览器地址栏拖入网页链接。"; return }
+                self.store.addToolbox(URL(string: value)?.host ?? "网页链接", value, ["未分类"])
+            }
+        }
+        return true
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Text("拖拽网页或飞书文档到这里，自动收进百宝箱").font(pixel(12)).foregroundStyle(Retro.dim)
+                Spacer()
+                Button("添加链接") { showForm = true }.buttonStyle(RetroButtonStyle(prominent: true))
+            }
+            .padding(14).panel(true)
+            HStack(spacing: 10) {
+                TextField("搜索标题或网址…", text: $query).textFieldStyle(.plain).font(pixel(12)).inputBox()
+                Text("\(links.count) 个链接").font(pixel(12)).foregroundStyle(Retro.dim)
+            }
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) { ForEach(allTags, id: \.self) { item in Button(item) { tag = item }.buttonStyle(RetroButtonStyle(prominent: tag == item, tint: tag == item ? Retro.accent : nil)) }; Button("管理标签") { showTagManager = true }.buttonStyle(RetroButtonStyle()) }
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], spacing: 10) {
+                ForEach(links) { link in
+                    VStack(alignment: .leading, spacing: 9) {
+                        HStack { Text(link.initials).font(pixel(12)).foregroundStyle(Retro.bg).frame(width: 32, height: 32).background(Retro.accent); Spacer(); Button { store.toggleToolboxFavorite(link) } label: { Image(systemName: link.favorite ? "star.fill" : "star").foregroundStyle(link.favorite ? peach : Retro.dim) }.buttonStyle(.plain) }
+                        Text(link.title).font(pixel(14)).foregroundStyle(Retro.ink).lineLimit(2)
+                        Text(link.host).font(pixel(12)).foregroundStyle(Retro.dim).lineLimit(1)
+                        HStack { Button(link.tags.first ?? "未分类") { editingLink = link; editingTags = link.tags.joined(separator: ", ") }.buttonStyle(.plain).foregroundStyle(Retro.dim); Spacer(); Button("打开 ↗") { if let value = URL(string: link.url) { NSWorkspace.shared.open(value) } }.buttonStyle(.plain).foregroundStyle(Retro.accent) }
+                    }.padding(13).frame(maxWidth: .infinity, alignment: .leading).background(Retro.bg).overlay(Rectangle().stroke(Retro.line, lineWidth: 1))
+                }
+            }
+            .overlay { if links.isEmpty { RetroEmpty(title: "还没有链接", detail: "拖入网页或点击“添加链接”开始整理。") } }
+        }
+        .onDrop(of: [UTType.url.identifier, UTType.plainText.identifier], isTargeted: $dropTargeted, perform: receive)
+        .sheet(isPresented: $showForm) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("添加到百宝箱").font(pixel(18)).foregroundStyle(Retro.ink)
+                TextField("链接地址", text: $url).textFieldStyle(.roundedBorder)
+                TextField("名称（可选）", text: $title).textFieldStyle(.roundedBorder)
+                TextField("标签，用逗号分隔", text: $tagsText).textFieldStyle(.roundedBorder)
+                HStack { Spacer(); Button("取消") { showForm = false }.buttonStyle(RetroButtonStyle()); Button("保存") { let parsedTags = tagsText.split(whereSeparator: { $0 == "," || $0 == "，" }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }; let before = store.toolboxLinks.count; store.addToolbox(title, url, parsedTags); if store.toolboxLinks.count > before { url = ""; title = ""; tagsText = ""; showForm = false } }.buttonStyle(RetroButtonStyle(prominent: true)) }
+            }.padding(20).frame(width: 420).background(Retro.panel).preferredColorScheme(.dark)
+        }
+        .sheet(item: $editingLink) { link in
+            VStack(alignment: .leading, spacing: 12) {
+                Text("编辑标签").font(pixel(18)).foregroundStyle(Retro.ink)
+                Text(link.title).font(pixel(12)).foregroundStyle(Retro.dim)
+                TextField("标签，用逗号分隔", text: $editingTags).textFieldStyle(.roundedBorder)
+                HStack { Spacer(); Button("取消") { editingLink = nil }.buttonStyle(RetroButtonStyle()); Button("保存标签") { let values = editingTags.split(whereSeparator: { $0 == "," || $0 == "，" }).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }; store.updateToolboxTags(link, values); editingLink = nil }.buttonStyle(RetroButtonStyle(prominent: true)) }
+            }.padding(20).frame(width: 420).background(Retro.panel).preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showTagManager) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("管理标签").font(pixel(18)).foregroundStyle(Retro.ink)
+                HStack { TextField("新标签名称", text: $newTag).textFieldStyle(.roundedBorder); Button("新增") { let value = newTag.trimmingCharacters(in: .whitespacesAndNewlines); if !value.isEmpty { newTag = ""; tag = value; showTagManager = false; showForm = true; tagsText = value } }.buttonStyle(RetroButtonStyle(prominent: true)) }
+                ForEach(allTags.dropFirst(), id: \.self) { item in
+                    HStack { Text(item).font(pixel(13)).foregroundStyle(Retro.ink); Spacer(); Button("重命名") { renameTag = item; renameText = item }.buttonStyle(RetroButtonStyle()); Button("删除") { store.deleteToolboxTag(item); if tag == item { tag = "全部" } }.buttonStyle(RetroButtonStyle(tint: peach)) }
+                }
+                HStack { Spacer(); Button("完成") { showTagManager = false }.buttonStyle(RetroButtonStyle(prominent: true)) }
+            }.padding(20).frame(width: 460).background(Retro.panel).preferredColorScheme(.dark)
+        }
+        .alert("重命名标签", isPresented: Binding(get: { renameTag != nil }, set: { if !$0 { renameTag = nil } })) {
+            TextField("标签名称", text: $renameText)
+            Button("保存") { if let old = renameTag { store.renameToolboxTag(old, renameText); if tag == old { tag = renameText.trimmingCharacters(in: .whitespacesAndNewlines) }; renameTag = nil } }
+            Button("取消", role: .cancel) { renameTag = nil }
+        }
+    }
+}
+
 struct CompletionButton: View {
     @EnvironmentObject var store: DeskStore
     let reminder: EKReminder
@@ -935,7 +1064,7 @@ struct Workbench: View {
     @State var selectedDay = Calendar.current.startOfDay(for: Date())
     @State var pendingDeletion: DeletionRequest?
     let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
-    let sections = ["概览", "本周重点", "待办", "日程", "备忘"]
+    let sections = ["概览", "百宝箱", "本周重点", "待办", "日程", "备忘"]
     var filtered: [EKReminder] {
         let items: [EKReminder]
         switch tab {
@@ -963,6 +1092,7 @@ struct Workbench: View {
     var scheduleEvents: [EKEvent] { tab == "选中日" ? browseDayEvents : store.browseEvents }
     var tabsForSection: [String] {
         switch section {
+        case "百宝箱": return ["全部链接", "收藏"]
         case "本周重点": return ["全部", "已置顶"]
         case "日程": return ["整周全部", "选中日"]
         case "备忘": return ["最近 30 天", "紧凑"]
@@ -972,6 +1102,7 @@ struct Workbench: View {
     }
     var headline: (String, String) {
         switch section {
+        case "百宝箱": return ("链接百宝箱", "把常用网页和飞书文档，放在手边。")
         case "本周重点": return (store.weekFocusLabel, "只做最重要的几件事。")
         case "待办": return ("待办事项", "小步推进，也是进展。")
         case "日程": return ("日程安排", "给专注，也留一段时间。")
@@ -979,9 +1110,10 @@ struct Workbench: View {
         default: return ("我的工作桌", "把今天，过得有条理。")
         }
     }
-    var newLabel: String { section == "日程" ? "新建日程" : section == "备忘" ? "新建备忘" : "新建待办" }
+    var newLabel: String { section == "百宝箱" ? "添加链接" : section == "日程" ? "新建日程" : section == "备忘" ? "新建备忘" : "新建待办" }
     func newCompose() -> Compose {
         switch section {
+        case "百宝箱": return Compose()
         case "日程": return Compose(kind: "日程")
         case "备忘": return Compose(kind: "备忘")
         case "本周重点": return Compose(focus: true)
@@ -1003,6 +1135,7 @@ struct Workbench: View {
     }
     func badge(for item: String) -> Int? {
         switch item {
+        case "百宝箱": return store.toolboxLinks.count
         case "本周重点": return store.important.count
         case "待办": return store.reminders.count
         case "日程": return store.events.count
@@ -1338,6 +1471,7 @@ struct Workbench: View {
 
     @ViewBuilder var content: some View {
         switch section {
+        case "百宝箱": ToolboxView()
         case "本周重点": focusSection
         case "待办": todoSection
         case "日程": scheduleSection
