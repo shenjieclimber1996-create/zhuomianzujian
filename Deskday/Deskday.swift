@@ -48,6 +48,18 @@ struct AIArticle: Identifiable, Codable, Equatable {
         self.id = UUID(); self.title = title; self.summary = summary; self.url = url; self.source = source; self.publishedAt = publishedAt
     }
 }
+func aiChineseTitle(_ title: String, source: String) -> String {
+    let replacements = [("Introducing", "推出"), ("launches", "发布"), ("Launch", "发布"), ("new", "新"), ("New", "新"), ("model", "模型"), ("Model", "模型"), ("AI", "AI"), ("OpenAI", "OpenAI"), ("Google", "Google"), ("Hugging Face", "Hugging Face"), ("research", "研究"), ("Research", "研究"), ("security", "安全"), ("Security", "安全"), ("agent", "智能体"), ("Agent", "智能体")]
+    var value = title
+    for (from, to) in replacements { value = value.replacingOccurrences(of: from, with: to) }
+    let hasChinese = title.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
+    return value == title && !hasChinese ? "\(source)｜\(title)" : value
+}
+func aiChineseSummary(_ article: AIArticle) -> String {
+    let raw = article.summary.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+    if raw.unicodeScalars.contains(where: { $0.value >= 0x4E00 && $0.value <= 0x9FFF }) { return String(raw.prefix(150)) }
+    return "这是一条来自\(article.source)的 AI 最新动态，建议优先阅读原文，了解产品、研究或行业变化的具体细节。"
+}
 func quoted(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n") + "\"" }
 func html(_ s: String) -> String { s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\n", with: "<br>") }
 let scriptQueue = DispatchQueue(label: "deskday.notes")
@@ -1118,8 +1130,8 @@ struct AIInsightsView: View {
                     ForEach(store.aiArticles) { article in
                         VStack(alignment: .leading, spacing: 8) {
                             HStack { Text(article.source).font(pixel(11)).foregroundStyle(Retro.accent); Spacer(); Text(article.publishedAt.formatted(.dateTime.month().day())).font(pixel(11)).foregroundStyle(Retro.dim) }
-                            Text(article.title).font(pixel(14)).foregroundStyle(Retro.ink).fixedSize(horizontal: false, vertical: true)
-                            Text(article.summary).font(pixel(12)).foregroundStyle(Retro.dim).lineLimit(3)
+                            Text(aiChineseTitle(article.title, source: article.source)).font(pixel(14)).foregroundStyle(Retro.ink).fixedSize(horizontal: false, vertical: true)
+                            Text(aiChineseSummary(article)).font(pixel(12)).foregroundStyle(Retro.dim).lineLimit(3)
                             Button("阅读原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(RetroButtonStyle())
                         }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Retro.bg).overlay(Rectangle().stroke(Retro.line, lineWidth: 1))
                     }
@@ -1567,6 +1579,7 @@ struct Workbench: View {
     var overviewSection: some View {
         VStack(alignment: .leading, spacing: 20) {
             focusBlock
+            aiDigestBlock
             HStack(alignment: .top, spacing: 0) {
                 todoColumn
                 Rectangle().fill(Retro.line).frame(width: 1)
@@ -1576,6 +1589,34 @@ struct Workbench: View {
             }
             .panel()
         }
+    }
+
+    var aiDigestBlock: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Rectangle().fill(Retro.accent).frame(width: 6, height: 6)
+                Text("今日 AI 资讯").font(pixel(14)).foregroundStyle(Retro.ink)
+                Text("每日 09:00 自动更新 · 优先阅读").font(pixel(12)).foregroundStyle(Retro.dim)
+                Spacer()
+                Button("查看全部 →") { select("AI资讯") }.buttonStyle(.plain).foregroundStyle(Retro.accent)
+            }
+            if store.aiArticles.isEmpty {
+                Text("资讯将在每天 9 点后自动更新，打开 AI资讯 可查看全部来源。").font(pixel(12)).foregroundStyle(Retro.dim)
+            } else {
+                ForEach(Array(store.aiArticles.prefix(3))) { article in
+                    HStack(alignment: .top, spacing: 10) {
+                        Text("•").font(pixel(14)).foregroundStyle(Retro.accent)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(aiChineseTitle(article.title, source: article.source)).font(pixel(13)).foregroundStyle(Retro.ink).lineLimit(2)
+                            Text(aiChineseSummary(article)).font(pixel(11)).foregroundStyle(Retro.dim).lineLimit(2)
+                        }
+                        Spacer()
+                        Button("原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(Retro.accent)
+                    }
+                    if article.id != store.aiArticles.prefix(3).last?.id { Rectangle().fill(Retro.line).frame(height: 1) }
+                }
+            }
+        }.padding(16).panel(true)
     }
 
     var focusBlock: some View {
