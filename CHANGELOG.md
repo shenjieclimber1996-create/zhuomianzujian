@@ -7,6 +7,8 @@
 - 默认读取 WaytoAGI 飞书知识库入口，以及 OpenAI、Google AI、Hugging Face 公开订阅源。
 - 每条资讯保留来源、摘要和原文链接，可直接打开阅读。
 - 资讯本地缓存到 `UserDefaults`，网络暂时不可用时仍可查看上次内容。
+- 新增公开网络搜索来源：Google News 与 Bing News 的 AI 关键词 RSS 结果。
+- Deskday 启动后自动检查；每天 09:00 后首次检查时自动更新，无需手动触发。应用完全退出时会在下次启动后补刷当天内容。
 
 ## 百宝箱
 

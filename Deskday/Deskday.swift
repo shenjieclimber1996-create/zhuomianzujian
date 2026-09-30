@@ -146,7 +146,9 @@ func apple(_ source: String) async throws -> NSAppleEventDescriptor {
             ("WaytoAGI 飞书知识库", "https://waytoagi.feishu.cn/wiki/QPe5w5g7UisbEkkow8XcDmOpn8e"),
             ("OpenAI", "https://openai.com/news/rss.xml"),
             ("Google AI", "https://blog.google/technology/ai/rss/"),
-            ("Hugging Face", "https://huggingface.co/blog/feed.xml")
+            ("Hugging Face", "https://huggingface.co/blog/feed.xml"),
+            ("公开网络搜索 · Google News", "https://news.google.com/rss/search?q=人工智能%20OR%20生成式AI%20OR%20大模型&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"),
+            ("公开网络搜索 · Bing News", "https://www.bing.com/news/search?q=AI%20artificial%20intelligence&format=rss")
         ]
         var result: [AIArticle] = [AIArticle(title: "WaytoAGI · AI 资讯知识库", summary: "打开飞书知识库查看最新 AI 资讯与精选文章。", url: sources[0].1, source: sources[0].0)]
         for (source, address) in sources.dropFirst() {
@@ -1103,7 +1105,7 @@ struct AIInsightsView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("每日 09:00 自动更新").font(pixel(13)).foregroundStyle(Retro.accent)
-                    Text("来自 WaytoAGI、公开 AI 资讯源和订阅源").font(pixel(12)).foregroundStyle(Retro.dim)
+                    Text("来自 WaytoAGI、官方订阅源和公开网络搜索").font(pixel(12)).foregroundStyle(Retro.dim)
                 }
                 Spacer()
                 if store.aiBusy { ProgressView().controlSize(.small) }
