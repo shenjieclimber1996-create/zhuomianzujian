@@ -1586,7 +1586,6 @@ struct Workbench: View {
     var overviewSection: some View {
         VStack(alignment: .leading, spacing: 20) {
             focusBlock
-            aiDigestBlock
             HStack(alignment: .top, spacing: 0) {
                 todoColumn
                 Rectangle().fill(Retro.line).frame(width: 1)
@@ -1595,6 +1594,7 @@ struct Workbench: View {
                 memoColumn
             }
             .panel()
+            aiDigestBlock
         }
     }
 
