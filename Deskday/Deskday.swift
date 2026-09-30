@@ -37,6 +37,17 @@ struct ToolboxLink: Identifiable, Codable, Equatable {
     var host: String { URL(string: url)?.host?.replacingOccurrences(of: "www.", with: "") ?? url }
     var initials: String { String(title.prefix(2)).uppercased() }
 }
+struct AIArticle: Identifiable, Codable, Equatable {
+    let id: UUID
+    var title: String
+    var summary: String
+    var url: String
+    var source: String
+    var publishedAt: Date
+    init(title: String, summary: String, url: String, source: String, publishedAt: Date = Date()) {
+        self.id = UUID(); self.title = title; self.summary = summary; self.url = url; self.source = source; self.publishedAt = publishedAt
+    }
+}
 func quoted(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n") + "\"" }
 func html(_ s: String) -> String { s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\n", with: "<br>") }
 let scriptQueue = DispatchQueue(label: "deskday.notes")
@@ -70,6 +81,9 @@ func apple(_ source: String) async throws -> NSAppleEventDescriptor {
     @Published var lastSync: Date?
     @Published var pinned: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "pinned") ?? [])
     @Published var toolboxLinks: [ToolboxLink] = (try? JSONDecoder().decode([ToolboxLink].self, from: UserDefaults.standard.data(forKey: "toolboxLinks") ?? Data())) ?? []
+    @Published var aiArticles: [AIArticle] = (try? JSONDecoder().decode([AIArticle].self, from: UserDefaults.standard.data(forKey: "aiArticles") ?? Data())) ?? []
+    @Published var aiLastRefresh: Date? = UserDefaults.standard.object(forKey: "aiLastRefresh") as? Date
+    @Published var aiBusy = false
     /// 日程分区“任意日期查看”的浏览锚点与对应整周事件；不影响 events（仍固定为本周，供概览/桌面统计）。
     @Published var browseDate: Date = Date()
     @Published var browseEvents: [EKEvent] = []
@@ -120,6 +134,35 @@ func apple(_ source: String) async throws -> NSAppleEventDescriptor {
         toolboxLinks.insert(ToolboxLink(title: title.isEmpty ? (parsed.host ?? value) : title, url: value, tags: tags), at: 0); saveToolbox(); message = "已保存到百宝箱 · " + (parsed.host ?? value)
     }
     func toggleToolboxFavorite(_ link: ToolboxLink) { guard let i = toolboxLinks.firstIndex(where: { $0.id == link.id }) else { return }; toolboxLinks[i].favorite.toggle(); saveToolbox() }
+    func saveAI() { if let data = try? JSONEncoder().encode(aiArticles) { UserDefaults.standard.set(data, forKey: "aiArticles") }; if let date = aiLastRefresh { UserDefaults.standard.set(date, forKey: "aiLastRefresh") } }
+    func refreshAIIfNeeded(_ now: Date = Date()) async {
+        let hour = Calendar.current.component(.hour, from: now)
+        guard hour >= 9, aiLastRefresh.map({ Calendar.current.isDate($0, inSameDayAs: now) }) != true else { return }
+        await refreshAI()
+    }
+    func refreshAI() async {
+        guard !aiBusy else { return }; aiBusy = true; defer { aiBusy = false }
+        let sources: [(String, String)] = [
+            ("WaytoAGI 飞书知识库", "https://waytoagi.feishu.cn/wiki/QPe5w5g7UisbEkkow8XcDmOpn8e"),
+            ("OpenAI", "https://openai.com/news/rss.xml"),
+            ("Google AI", "https://blog.google/technology/ai/rss/"),
+            ("Hugging Face", "https://huggingface.co/blog/feed.xml")
+        ]
+        var result: [AIArticle] = [AIArticle(title: "WaytoAGI · AI 资讯知识库", summary: "打开飞书知识库查看最新 AI 资讯与精选文章。", url: sources[0].1, source: sources[0].0)]
+        for (source, address) in sources.dropFirst() {
+            guard let url = URL(string: address), let (data, _) = try? await URLSession.shared.data(from: url), let text = String(data: data, encoding: .utf8) else { continue }
+            result.append(contentsOf: parseFeed(text, source: source))
+        }
+        aiArticles = Array(result.sorted { $0.publishedAt > $1.publishedAt }.prefix(30)); aiLastRefresh = Date(); saveAI(); message = "AI 资讯已更新 · " + Date().formatted(date: .omitted, time: .shortened)
+    }
+    func parseFeed(_ text: String, source: String) -> [AIArticle] {
+        let blocks = Array(text.components(separatedBy: "<item>").dropFirst()) + Array(text.components(separatedBy: "<entry>").dropFirst())
+        return blocks.prefix(8).compactMap { block in
+            func value(_ key: String) -> String? { guard let start = block.range(of: "<\(key)[^>]*>", options: .regularExpression), let end = block.range(of: "</\(key)>", range: start.upperBound..<block.endIndex) else { return nil }; return String(block[start.upperBound..<end.lowerBound]).replacingOccurrences(of: "<![CDATA[", with: "").replacingOccurrences(of: "]]>", with: "").replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines) }
+            guard let title = value("title"), let link = value("link"), let url = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)), url.host != nil else { return nil }
+            return AIArticle(title: title, summary: value("description") ?? value("summary") ?? "打开原文查看详情。", url: url.absoluteString, source: source)
+        }
+    }
     func updateToolboxTags(_ link: ToolboxLink, _ tags: [String]) { guard let i = toolboxLinks.firstIndex(where: { $0.id == link.id }) else { return }; toolboxLinks[i].tags = tags.isEmpty ? ["未分类"] : tags; saveToolbox() }
     func renameToolboxTag(_ old: String, _ new: String) { let value = new.trimmingCharacters(in: .whitespacesAndNewlines); guard !value.isEmpty, value != "全部" else { return }; for i in toolboxLinks.indices { toolboxLinks[i].tags = toolboxLinks[i].tags.map { $0 == old ? value : $0 } }; saveToolbox() }
     func deleteToolboxTag(_ tag: String) { for i in toolboxLinks.indices { toolboxLinks[i].tags.removeAll { $0 == tag }; if toolboxLinks[i].tags.isEmpty { toolboxLinks[i].tags = ["未分类"] } }; saveToolbox() }
@@ -1053,6 +1096,38 @@ struct CompletionButton: View {
     }
 }
 
+struct AIInsightsView: View {
+    @EnvironmentObject var store: DeskStore
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("每日 09:00 自动更新").font(pixel(13)).foregroundStyle(Retro.accent)
+                    Text("来自 WaytoAGI、公开 AI 资讯源和订阅源").font(pixel(12)).foregroundStyle(Retro.dim)
+                }
+                Spacer()
+                if store.aiBusy { ProgressView().controlSize(.small) }
+                Text(store.aiLastRefresh.map { "更新于 " + $0.formatted(date: .omitted, time: .shortened) } ?? "等待首次自动更新").font(pixel(12)).foregroundStyle(Retro.dim)
+            }.padding(14).panel(true)
+            if store.aiArticles.isEmpty {
+                RetroEmpty(title: "今天的 AI 资讯还在准备中", detail: "应用会在每天 9 点后自动抓取；保持 Deskday 运行即可。")
+            } else {
+                LazyVStack(spacing: 10) {
+                    ForEach(store.aiArticles) { article in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack { Text(article.source).font(pixel(11)).foregroundStyle(Retro.accent); Spacer(); Text(article.publishedAt.formatted(.dateTime.month().day())).font(pixel(11)).foregroundStyle(Retro.dim) }
+                            Text(article.title).font(pixel(14)).foregroundStyle(Retro.ink).fixedSize(horizontal: false, vertical: true)
+                            Text(article.summary).font(pixel(12)).foregroundStyle(Retro.dim).lineLimit(3)
+                            Button("阅读原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(RetroButtonStyle())
+                        }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Retro.bg).overlay(Rectangle().stroke(Retro.line, lineWidth: 1))
+                    }
+                }
+            }
+        }
+        .task { await store.refreshAIIfNeeded() }
+    }
+}
+
 struct Workbench: View {
     @EnvironmentObject var store: DeskStore
     @State var composer: Compose?
@@ -1064,7 +1139,7 @@ struct Workbench: View {
     @State var selectedDay = Calendar.current.startOfDay(for: Date())
     @State var pendingDeletion: DeletionRequest?
     let timer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
-    let sections = ["概览", "百宝箱", "本周重点", "待办", "日程", "备忘"]
+    let sections = ["概览", "AI资讯", "百宝箱", "本周重点", "待办", "日程", "备忘"]
     var filtered: [EKReminder] {
         let items: [EKReminder]
         switch tab {
@@ -1092,6 +1167,7 @@ struct Workbench: View {
     var scheduleEvents: [EKEvent] { tab == "选中日" ? browseDayEvents : store.browseEvents }
     var tabsForSection: [String] {
         switch section {
+        case "AI资讯": return ["今日资讯"]
         case "百宝箱": return ["全部链接", "收藏"]
         case "本周重点": return ["全部", "已置顶"]
         case "日程": return ["整周全部", "选中日"]
@@ -1102,6 +1178,7 @@ struct Workbench: View {
     }
     var headline: (String, String) {
         switch section {
+        case "AI资讯": return ("AI 资讯", "每天早上 9 点，把值得读的 AI 动态送到工作台。")
         case "百宝箱": return ("链接百宝箱", "把常用网页和飞书文档，放在手边。")
         case "本周重点": return (store.weekFocusLabel, "只做最重要的几件事。")
         case "待办": return ("待办事项", "小步推进，也是进展。")
@@ -1135,6 +1212,7 @@ struct Workbench: View {
     }
     func badge(for item: String) -> Int? {
         switch item {
+        case "AI资讯": return store.aiArticles.count
         case "百宝箱": return store.toolboxLinks.count
         case "本周重点": return store.important.count
         case "待办": return store.reminders.count
@@ -1352,11 +1430,12 @@ struct Workbench: View {
         .sheet(item: $composer) { Editor(input: $0).environmentObject(store) }
         .alert("需要留意", isPresented: Binding(get: { store.error != nil && composer == nil }, set: { if !$0 { store.error = nil } })) { Button("知道了") { store.error = nil } } message: { Text(store.error ?? "") }
         .task { await store.refresh() }
+        .task { await store.refreshAIIfNeeded() }
         .onChange(of: store.browseDate) { _, _ in Task { await store.refreshBrowse() } }
         .onChange(of: section) { _, newValue in if newValue == "日程" { Task { await store.refreshBrowse() } } }
         .onReceive(timer) { tick in
             now = tick
-            Task { await store.refresh(); if store.notesConnected && Calendar.current.component(.minute, from: tick) % 5 == 0 { await store.refreshNotes() } }
+            Task { await store.refresh(); await store.refreshAIIfNeeded(tick); if store.notesConnected && Calendar.current.component(.minute, from: tick) % 5 == 0 { await store.refreshNotes() } }
         }
     }
 
@@ -1471,6 +1550,7 @@ struct Workbench: View {
 
     @ViewBuilder var content: some View {
         switch section {
+        case "AI资讯": AIInsightsView()
         case "百宝箱": ToolboxView()
         case "本周重点": focusSection
         case "待办": todoSection
