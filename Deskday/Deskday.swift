@@ -1112,34 +1112,33 @@ struct CompletionButton: View {
 
 struct AIInsightsView: View {
     @EnvironmentObject var store: DeskStore
+    var todayText: String { Date().formatted(.dateTime.year().month().day()) }
+    var top: [AIArticle] { Array(store.aiArticles.prefix(3)) }
+    var global: [AIArticle] { Array(store.aiArticles.dropFirst(3).prefix(6)) }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("每日 09:00 自动更新").font(pixel(13)).foregroundStyle(Retro.accent)
-                    Text("来自 WaytoAGI、官方订阅源和公开网络搜索").font(pixel(12)).foregroundStyle(Retro.dim)
-                }
-                Spacer()
-                if store.aiBusy { ProgressView().controlSize(.small) }
-                Text(store.aiLastRefresh.map { "更新于 " + $0.formatted(date: .omitted, time: .shortened) } ?? "等待首次自动更新").font(pixel(12)).foregroundStyle(Retro.dim)
-            }.padding(14).panel(true)
+            VStack(alignment: .leading, spacing: 7) {
+                HStack { Text("AI晨报 \(todayText)").font(pixel(22)).foregroundStyle(Retro.ink); Spacer(); if store.aiBusy { ProgressView().controlSize(.small) } }
+                Text("面向持续跟进 AI 行业的人｜每日 09:00 自动更新｜信息来源：WaytoAGI、官方订阅源和公开网络搜索").font(pixel(12)).foregroundStyle(Retro.dim)
+            }.padding(16).panel(true)
             if store.aiArticles.isEmpty {
                 RetroEmpty(title: "今天的 AI 资讯还在准备中", detail: "应用会在每天 9 点后自动抓取；保持 Deskday 运行即可。")
             } else {
-                LazyVStack(spacing: 10) {
-                    ForEach(store.aiArticles) { article in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack { Text(article.source).font(pixel(11)).foregroundStyle(Retro.accent); Spacer(); Text(article.publishedAt.formatted(.dateTime.month().day())).font(pixel(11)).foregroundStyle(Retro.dim) }
-                            Text(aiChineseTitle(article.title, source: article.source)).font(pixel(14)).foregroundStyle(Retro.ink).fixedSize(horizontal: false, vertical: true)
-                            Text(aiChineseSummary(article)).font(pixel(12)).foregroundStyle(Retro.dim).lineLimit(3)
-                            Button("阅读原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(RetroButtonStyle())
-                        }.padding(14).frame(maxWidth: .infinity, alignment: .leading).background(Retro.bg).overlay(Rectangle().stroke(Retro.line, lineWidth: 1))
-                    }
-                }
+                reportSection("今日先看：3 个可操作结论") { ForEach(Array(top.enumerated()), id: \.element.id) { index, article in conclusionRow(index + 1, article) } }
+                reportSection("1. 全球 AI 行业最新资讯") { ForEach(global) { article in articleRow(article) } }
+                reportSection("2. 中国 AI 与公开网络热点") { ForEach(Array(store.aiArticles.filter { $0.source.contains("Google News") || $0.source.contains("WaytoAGI") }.prefix(5))) { article in articleRow(article) } }
+                reportSection("3. 热门模型与产品：今天为什么值得关注") { ForEach(Array(store.aiArticles.prefix(6))) { article in productRow(article) } }
+                reportSection("4. 今日学习建议") { ForEach(Array(store.aiArticles.prefix(3))) { article in recommendationRow(article) } }
             }
         }
         .task { await store.refreshAIIfNeeded() }
     }
+    @ViewBuilder func reportSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View { VStack(alignment: .leading, spacing: 10) { Text(title).font(pixel(16)).foregroundStyle(Retro.accent); content() }.padding(16).panel() }
+    func conclusionRow(_ number: Int, _ article: AIArticle) -> some View { HStack(alignment: .top, spacing: 8) { Text("\(number).").font(pixel(13)).foregroundStyle(Retro.accent); VStack(alignment: .leading, spacing: 4) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(13)).foregroundStyle(Retro.ink); Text("结论：\(aiChineseSummary(article)) 建议今天打开原文，判断它是否影响你的模型选择、产品路线或工作流。").font(pixel(12)).foregroundStyle(Retro.dim); sourceButton(article) } } }
+    func articleRow(_ article: AIArticle) -> some View { VStack(alignment: .leading, spacing: 5) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(14)).foregroundStyle(Retro.ink); Text(aiChineseSummary(article)).font(pixel(12)).foregroundStyle(Retro.dim); Text("判断：这条信息值得跟进，重点关注它对产品、模型成本、Agent 运行时或合规的影响。").font(pixel(12)).foregroundStyle(peach); sourceButton(article) }.padding(.vertical, 4) }
+    func productRow(_ article: AIArticle) -> some View { HStack(alignment: .top) { Text("•").foregroundStyle(Retro.accent); VStack(alignment: .leading, spacing: 4) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(13)).foregroundStyle(Retro.ink); Text("适合做一次原型验证或成本/能力对比实验。").font(pixel(12)).foregroundStyle(Retro.dim) }; Spacer(); sourceButton(article) } }
+    func recommendationRow(_ article: AIArticle) -> some View { HStack { Text("适合阅读：").font(pixel(12)).foregroundStyle(Retro.dim); Text(aiChineseTitle(article.title, source: article.source)).font(pixel(12)).foregroundStyle(Retro.ink); Spacer(); sourceButton(article) } }
+    func sourceButton(_ article: AIArticle) -> some View { Button("来源：\(article.source) · 原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(Retro.accent).font(pixel(11)) }
 }
 
 struct Workbench: View {
