@@ -60,6 +60,14 @@ func aiChineseSummary(_ article: AIArticle) -> String {
     if raw.unicodeScalars.contains(where: { $0.value >= 0x4E00 && $0.value <= 0x9FFF }) { return String(raw.prefix(150)) }
     return "这是一条来自\(article.source)的 AI 最新动态，建议优先阅读原文，了解产品、研究或行业变化的具体细节。"
 }
+func aiActionableConclusion(_ article: AIArticle) -> String {
+    let text = (article.title + " " + article.summary).lowercased()
+    if text.contains("job") || text.contains("office") || text.contains("work") || text.contains("职") { return "AI 正在进入真实工作场景并改变岗位分工；今天应挑一个重复任务做自动化拆解，记录节省时间和任务成功率。" }
+    if text.contains("model") || text.contains("模型") || text.contains("launch") || text.contains("推出") { return "模型能力和价格仍在快速变化；今天应重新比较成本、速度、上下文和工具调用，更新自己的模型路由。" }
+    if text.contains("security") || text.contains("safety") || text.contains("regulat") || text.contains("合规") { return "AI 产品的安全与合规正在成为上线条件；今天应检查输出标识、日志留存、权限边界和人工兜底流程。" }
+    if text.contains("agent") || text.contains("智能体") || text.contains("autom") { return "竞争重点正在从聊天模型转向可运行的 Agent；今天应优先验证调度、预算、工具调用和失败恢复，而不是只看模型分数。" }
+    return "这条资讯反映了 AI 产品或产业生态的一个新变化；今天应判断它是否影响你的用户需求、技术选型或成本结构，并保留一个可验证的小实验。"
+}
 func quoted(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\r", with: "\\r").replacingOccurrences(of: "\n", with: "\\n") + "\"" }
 func html(_ s: String) -> String { s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;").replacingOccurrences(of: ">", with: "&gt;").replacingOccurrences(of: "\n", with: "<br>") }
 let scriptQueue = DispatchQueue(label: "deskday.notes")
@@ -1134,8 +1142,8 @@ struct AIInsightsView: View {
         .task { await store.refreshAIIfNeeded() }
     }
     @ViewBuilder func reportSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View { VStack(alignment: .leading, spacing: 10) { Text(title).font(pixel(16)).foregroundStyle(Retro.accent); content() }.padding(16).panel() }
-    func conclusionRow(_ number: Int, _ article: AIArticle) -> some View { HStack(alignment: .top, spacing: 8) { Text("\(number).").font(pixel(13)).foregroundStyle(Retro.accent); VStack(alignment: .leading, spacing: 4) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(13)).foregroundStyle(Retro.ink); Text("结论：\(aiChineseSummary(article)) 建议今天打开原文，判断它是否影响你的模型选择、产品路线或工作流。").font(pixel(12)).foregroundStyle(Retro.dim); sourceButton(article) } } }
-    func articleRow(_ article: AIArticle) -> some View { VStack(alignment: .leading, spacing: 5) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(14)).foregroundStyle(Retro.ink); Text(aiChineseSummary(article)).font(pixel(12)).foregroundStyle(Retro.dim); Text("判断：这条信息值得跟进，重点关注它对产品、模型成本、Agent 运行时或合规的影响。").font(pixel(12)).foregroundStyle(peach); sourceButton(article) }.padding(.vertical, 4) }
+    func conclusionRow(_ number: Int, _ article: AIArticle) -> some View { HStack(alignment: .top, spacing: 8) { Text("\(number).").font(pixel(13)).foregroundStyle(Retro.accent); VStack(alignment: .leading, spacing: 4) { Text(aiActionableConclusion(article)).font(pixel(13)).foregroundStyle(Retro.ink).fixedSize(horizontal: false, vertical: true); Text("依据：\(aiChineseTitle(article.title, source: article.source))。\(aiChineseSummary(article))").font(pixel(12)).foregroundStyle(Retro.dim).lineLimit(3); sourceButton(article) } } }
+    func articleRow(_ article: AIArticle) -> some View { VStack(alignment: .leading, spacing: 5) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(14)).foregroundStyle(Retro.ink); Text(aiChineseSummary(article)).font(pixel(12)).foregroundStyle(Retro.dim); Text("判断 / 行动：\(aiActionableConclusion(article))").font(pixel(12)).foregroundStyle(peach); sourceButton(article) }.padding(.vertical, 4) }
     func productRow(_ article: AIArticle) -> some View { HStack(alignment: .top) { Text("•").foregroundStyle(Retro.accent); VStack(alignment: .leading, spacing: 4) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(13)).foregroundStyle(Retro.ink); Text("适合做一次原型验证或成本/能力对比实验。").font(pixel(12)).foregroundStyle(Retro.dim) }; Spacer(); sourceButton(article) } }
     func recommendationRow(_ article: AIArticle) -> some View { HStack { Text("适合阅读：").font(pixel(12)).foregroundStyle(Retro.dim); Text(aiChineseTitle(article.title, source: article.source)).font(pixel(12)).foregroundStyle(Retro.ink); Spacer(); sourceButton(article) } }
     func sourceButton(_ article: AIArticle) -> some View { Button("来源：\(article.source) · 原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(Retro.accent).font(pixel(11)) }
@@ -1602,17 +1610,23 @@ struct Workbench: View {
             if store.aiArticles.isEmpty {
                 Text("资讯将在每天 9 点后自动更新，打开 AI资讯 可查看全部来源。").font(pixel(12)).foregroundStyle(Retro.dim)
             } else {
-                ForEach(Array(store.aiArticles.prefix(3))) { article in
+                Text("今日先看：3 个可操作结论").font(pixel(12)).foregroundStyle(Retro.accent)
+                ForEach(Array(store.aiArticles.prefix(3).enumerated()), id: \.element.id) { index, article in
                     HStack(alignment: .top, spacing: 10) {
-                        Text("•").font(pixel(14)).foregroundStyle(Retro.accent)
+                        Text("\(index + 1).").font(pixel(13)).foregroundStyle(Retro.accent)
                         VStack(alignment: .leading, spacing: 4) {
-                            Text(aiChineseTitle(article.title, source: article.source)).font(pixel(13)).foregroundStyle(Retro.ink).lineLimit(2)
-                            Text(aiChineseSummary(article)).font(pixel(11)).foregroundStyle(Retro.dim).lineLimit(2)
+                            Text(aiActionableConclusion(article)).font(pixel(12)).foregroundStyle(Retro.ink).lineLimit(3)
+                            Text("依据：\(aiChineseTitle(article.title, source: article.source))").font(pixel(11)).foregroundStyle(Retro.dim).lineLimit(1)
                         }
-                        Spacer()
-                        Button("原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(Retro.accent)
                     }
-                    if article.id != store.aiArticles.prefix(3).last?.id { Rectangle().fill(Retro.line).frame(height: 1) }
+                }
+                Text("最新重要资讯").font(pixel(12)).foregroundStyle(Retro.accent).padding(.top, 4)
+                ForEach(Array(store.aiArticles.dropFirst(3).prefix(3))) { article in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("•").foregroundStyle(Retro.accent)
+                        VStack(alignment: .leading, spacing: 3) { Text(aiChineseTitle(article.title, source: article.source)).font(pixel(12)).foregroundStyle(Retro.ink).lineLimit(2); Text(aiChineseSummary(article)).font(pixel(11)).foregroundStyle(Retro.dim).lineLimit(2) }
+                        Spacer(); Button("原文 ↗") { if let url = URL(string: article.url) { NSWorkspace.shared.open(url) } }.buttonStyle(.plain).foregroundStyle(Retro.accent)
+                    }
                 }
             }
         }.padding(16).panel(true)
